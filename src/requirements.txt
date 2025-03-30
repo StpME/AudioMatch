@@ -1,0 +1,22 @@
+# Core audio processing
+numpy>=1.21.0
+scipy>=1.7.0
+librosa==0.10.1
+pydub>=0.25.1
+
+# GUI dependencies
+PyQt5>=5.15.9
+PyQt5-sip>=12.11.0
+
+# Advanced audio analysis
+fastdtw>=0.3.4
+resampy>=0.4.0
+
+# Additional backup python speech library if needed later
+python-speech-features>=0.6
+
+# librosa dependencies
+joblib>=1.1.0
+scikit-learn>=1.0.2
+numba>=0.56.4
+pooch>=1.6.0
