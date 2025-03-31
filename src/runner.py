@@ -75,8 +75,8 @@ class Runner(QThread):
                 except Exception as e:
                     self.error_occurred.emit(f"Skipping {os.path.basename(path)}: {str(e)}")
                 
-                # Force garbage collection after each file
-                gc.collect()
+                # Force garbage collection between each file
+                self._clear_memory()
                 
                 # Update progress
                 progress = int((total_loaded / len(self.original_files)) * 50)  # First half of progress -> then remastered
@@ -109,12 +109,7 @@ class Runner(QThread):
                     
                 try:
                     full_duration = AudioLoader.get_full_duration(path)
-                    # y, sr = AudioLoader.load_audio(path)
-                    # duration = librosa.get_duration(y=y, sr=sr)
-                    # features = FeatureExtractor.extract_features(y, sr)
                     match, details = self.comparator.compare(path)
-
-
 
                     orig_path = ''
                     if match:
@@ -131,15 +126,15 @@ class Runner(QThread):
                         'orig_path': orig_path,
                         'path': path, 
                         'rem_duration': full_duration,  # Add duration
-                        'orig_duration': orig_duration  # Add og duration
+                        'orig_duration': orig_duration,  # Add og duration
+                        'display_name': os.path.basename(path)
                     })
                 except Exception as e:
                     self.error_occurred.emit(f"Error processing {os.path.basename(path)}: {str(e)}")
                 
                 total_processed += 1
                 
-                # (call clear mem here instead)
-                gc.collect()
+                self._clear_memory()
                 
                 # Update progress (second half)
                 progress = 50 + int((total_processed / len(self.remastered_files)) * 50)

@@ -3,7 +3,8 @@ import os
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
                             QPushButton, QLabel, QFileDialog, QProgressBar, QTableWidget,
                             QTableWidgetItem, QHeaderView, QGroupBox, QButtonGroup, 
-                            QRadioButton, QMessageBox)
+                            QRadioButton, QMessageBox, QMenu, QInputDialog) # do generic import?
+
 from PyQt5.QtGui import QColor
 from PyQt5.QtCore import Qt
 from runner import Runner
@@ -17,10 +18,12 @@ class ComparisonGUI(QMainWindow):
         self.original_files = []
         self.remastered_files = []
         self.init_ui()
-        
         self.results = []
-
         self.runner = None
+
+        self.table.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.table.customContextMenuRequested.connect(self.context_menu)
+        self.rename_action = None
 
     def init_ui(self):
         self.setWindowTitle('Audio Matcher')
@@ -145,6 +148,157 @@ class ComparisonGUI(QMainWindow):
         main_widget.setLayout(layout)
         self.setCentralWidget(main_widget)
 
+    # When the source and target file cells are right clicked = context menu
+    def context_menu(self, pos):
+        menu = QMenu()
+        item = self.table.itemAt(pos)
+        
+        if item and item.column() in (0, 1):
+            self.rename_action = menu.addAction("Rename")
+            self.rename_action.triggered.connect(lambda: self.rename_file(item))
+            
+            self.match_action = menu.addAction("Match Name")
+            self.match_action.triggered.connect(lambda: self.match_name(item))
+            
+        menu.exec_(self.table.viewport().mapToGlobal(pos))
+
+    def match_name(self, item):
+        row = item.row()
+        col = item.column()
+        result = self.results[row]
+        
+        # Check confidence threshold (fail for bad matches)
+        if result['confidence'] < 0.3:
+            QMessageBox.warning(self, "No Match", 
+                            "Cannot match names for files with low confidence score")
+            return
+        
+        # Determine source and target names
+        if col == 0:  # Remastered -> Original
+            source_path = result.get('orig_path', '')
+            target_path = result['path']
+            direction = "remastered to match original"
+        elif col == 1:  # Original -> Remastered
+            source_path = result['path']
+            target_path = result.get('orig_path', '')
+            direction = "original to match remastered"
+        else:
+            return
+        
+        if not source_path or not target_path:
+            QMessageBox.warning(self, "Error", "No matching file exists")
+            return
+        
+        # Get only base name (no extensions)
+        source_base = os.path.splitext(os.path.basename(source_path))[0]
+        target_base, target_ext = os.path.splitext(os.path.basename(target_path))
+        
+        # Confirm rename
+        reply = QMessageBox.question(
+            self,
+            "Confirm Name Match",
+            f"Are you sure you want to rename {direction}?\n"
+            f"New name: {source_base}{target_ext}",
+            QMessageBox.Yes | QMessageBox.No
+        )
+        
+        if reply == QMessageBox.Yes:
+            new_name = f"{source_base}{target_ext}"
+            new_path = os.path.join(os.path.dirname(target_path), new_name)
+            
+            try:
+                os.rename(target_path, new_path)
+                
+                # Update records
+                if col == 0:
+                    self.results[row]['path'] = new_path
+                    self.results[row]['display_name'] = source_base
+                    self.table.item(row, 0).setText(source_base)
+                else:
+                    self.results[row]['orig_path'] = new_path
+                    # Update the comparator reference
+                    if self.runner and hasattr(self.runner, 'comparator') and self.runner.comparator:
+                        original_name = os.path.basename(new_path)
+                        if original_name in self.runner.comparator.reference_features:
+                            self.runner.comparator.reference_features[original_name]['path'] = new_path
+
+                QMessageBox.information(self, "Success", "File name matched successfully!")
+                
+            except Exception as e:
+                QMessageBox.critical(self, "Error", f"Could not rename file: {str(e)}")
+
+    def rename_file(self, item):
+        row = item.row()
+        col = item.column()
+        
+        # Get current path based on column
+        if col == 0:  # Remastered
+            current_path = self.results[row]['path']
+        elif col == 1:  # Original
+            current_path = self.results[row].get('orig_path', '')
+        else:
+            return
+
+        if not current_path or not os.path.exists(current_path):
+            QMessageBox.warning(self, "Error", "File not found!")
+            return
+
+        current_name = os.path.basename(current_path)
+        original_base, original_ext = os.path.splitext(current_name)
+        
+        new_name, confirm = QInputDialog.getText(
+            self, 
+            "Rename File", 
+            "Enter new name:", 
+            text=original_base  # Show name w/o extension
+            # need to make the file extension always show (and lock?) so user doesnt have to put
+            # in the file extension themselves when renaming since it is currently removing it each time
+        )
+        
+        if new_name and confirm:
+            # Split new name into base and extension
+            new_base, new_ext = os.path.splitext(new_name)
+            
+            # Preserve original extension if none provided
+            if not new_ext:
+                new_name += original_ext
+            # Validate that file extension matches original type
+            elif new_ext.lower() != original_ext.lower():
+                QMessageBox.warning(self, "Invalid Extension", 
+                                f"Extension must remain {original_ext}")
+                return
+
+            # Create full new path
+            new_path = os.path.join(
+                os.path.dirname(current_path),
+                new_name
+            )
+
+            try:
+                # Perform file rename
+                os.rename(current_path, new_path)
+                
+                # Update cell records
+                if col == 0:  # Remastered
+                    self.results[row]['path'] = new_path
+                    self.results[row]['display_name'] = os.path.basename(new_path)
+                    item.setText(os.path.basename(new_path))
+                elif col == 1:  # Original
+                    self.results[row]['orig_path'] = new_path
+                    # Update the comparator reference if it exists
+                    if self.runner and hasattr(self, 'runner') and self.runner.comparator:
+                        original_name = os.path.basename(new_path)
+                        if original_name in self.runner.comparator.reference_features:
+                            self.runner.comparator.reference_features[original_name]['path'] = new_path
+                
+                QMessageBox.information(self, "Success", "File renamed successfully!")
+                
+            except Exception as e:
+                QMessageBox.critical(self, "Error", 
+                                f"Could not rename file:\n{str(e)}")
+                # Revert display name
+                item.setText(os.path.basename(current_path))
+
     def select_originals(self):
         if self.folder_rb.isChecked():
             path = QFileDialog.getExistingDirectory(self, "Select Original Folder")
@@ -250,7 +404,7 @@ class ComparisonGUI(QMainWindow):
         self.table.setRowCount(len(results))
         
         for row, result in enumerate(results):
-            remastered_name = os.path.basename(result['path'])
+            remastered_name = result.get('display_name', os.path.basename(result['path']))
             self.table.setItem(row, 0, QTableWidgetItem(remastered_name))
             self.table.setItem(row, 1, QTableWidgetItem(result['match']))
             
