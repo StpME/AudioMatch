@@ -3,18 +3,30 @@ import os
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
                             QPushButton, QLabel, QFileDialog, QProgressBar, QTableWidget,
                             QTableWidgetItem, QHeaderView, QGroupBox, QButtonGroup, 
-                            QRadioButton, QMessageBox, QMenu, QInputDialog) # do generic import?
+                            QRadioButton, QMessageBox, QMenu, QInputDialog, QComboBox) # do generic import?
 
 from PyQt5.QtGui import QColor
 from PyQt5.QtCore import Qt
 from runner import Runner
 import librosa
-# import numpy as np
-# np.random.seed(42)
 
 class ComparisonGUI(QMainWindow):
+    # Constant for col names
+    COLUMN_NAMES = ["Remastered", "Original", "Confidence",
+                   "Remaster Duration", "Original Duration"]
+    # Constant for determining min confidence level before determining if a match
+    CONFIDENCE_THRESHOLD = 0.4
+    
     def __init__(self):
         super().__init__()
+
+        if getattr(sys, 'frozen', False):
+            self.base_path = sys._MEIPASS
+        else:
+            self.base_path = os.path.dirname(os.path.abspath(__file__))
+
+        self.img_dir = os.path.join(self.base_path, 'img')
+
         self.original_files = []
         self.remastered_files = []
         self.init_ui()
@@ -73,58 +85,74 @@ class ComparisonGUI(QMainWindow):
         
         # Results table
         self.table = QTableWidget()
-
-
-        self.table.setEditTriggers(QTableWidget.NoEditTriggers)  # Make cells non-editable
+        self.table.setEditTriggers(QTableWidget.NoEditTriggers)  # Non-editable cells
         self.table.setSelectionBehavior(QTableWidget.SelectItems)
         self.table.setSelectionMode(QTableWidget.SingleSelection)
-        self.table.setFocusPolicy(Qt.NoFocus)  # Remove focus border
-        # Custom styling for selection
-        self.table.setStyleSheet("""
-            QTableWidget::item:selected {
+        # self.table.setFocusPolicy(Qt.NoFocus)  # Remove focus border
+
+        # fix backslash issues and make explicit var
+        arrow_up = os.path.join(self.img_dir, 'arrow_up.png').replace('\\', '/')
+        arrow_down = os.path.join(self.img_dir, 'arrow_down.png').replace('\\', '/')
+
+        # Custom table stylesheet for selection cells
+        self.table.setStyleSheet(f"""
+            QTableWidget::item:selected {{
                 background-color: #e0e0e0;
                 color: black;
-            }
-            QTableCornerButton::section {
+            }}
+            QTableCornerButton::section {{
                 background-color: transparent;
                 border: none;
-            }
-            QHeaderView::section {
+            }}
+            QHeaderView::section {{
                 background-color: white;
                 border: none;
-            }
+                padding-right: 15px;
+            }}
+            QHeaderView::down-arrow {{
+            image: url({arrow_down});
+            width: 12px;
+            height: 12px;
+            }}
+            QHeaderView::up-arrow {{
+                image: url({arrow_up});
+                width: 12px;
+                height: 12px;
+            }}
         """)
 
+        # arrow existing debug 
+        print("Arrow paths:")
+        print("Up:", arrow_up, "Exists:", os.path.exists(arrow_up))
+        print("Down:", arrow_down, "Exists:", os.path.exists(arrow_down))
 
-
-
-
-
-
+        
         self.table.setColumnCount(5)
         self.table.setHorizontalHeaderLabels(["Remastered","Original",
                                               "Confidence", "Remaster Duration", "Original Duration"])
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
         self.table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeToContents)
         self.table.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeToContents)
+        # sort in table
+        self.table.setSortingEnabled(True)
+        # self.table.horizontalHeader().setSortIndicator(-1, Qt.AscendingOrder)
+        self.table.horizontalHeader().setSortIndicatorShown(True)
+        self.table.horizontalHeader().setSectionsClickable(True)
+        self.table.horizontalHeader().sortIndicatorChanged.connect(self.update_sort_indicator)
+
         layout.addWidget(self.table)
-
-
-
-
 
         # Disable header interactions
         header = self.table.horizontalHeader()
         header.setHighlightSections(False)
         header.setSectionResizeMode(QHeaderView.Stretch)
-        header.setSectionsClickable(False)
+        # header.setSectionsClickable(False)
+        header.setSectionsClickable(True)
         
         vertical_header = self.table.verticalHeader()
-        vertical_header.setVisible(False)  # Hide row #s
+        # vertical_header.setVisible(False)  # Hide row #s
         vertical_header.setSectionResizeMode(QHeaderView.Fixed)
         vertical_header.setDefaultSectionSize(1)
-
-
         
         # Progress bar
         self.progress = QProgressBar()
@@ -136,14 +164,14 @@ class ComparisonGUI(QMainWindow):
         btn_layout = QHBoxLayout()
         self.start_btn = QPushButton("Start Comparison")
         self.start_btn.clicked.connect(self.start_comparison)
-        self.export_btn = QPushButton("Export Results")
+        # self.export_btn = QPushButton("Export Results")
         btn_layout.addWidget(self.start_btn)
-        btn_layout.addWidget(self.export_btn)
+        # btn_layout.addWidget(self.export_btn)
         layout.addLayout(btn_layout)
 
-        self.diagnose_btn = QPushButton("Diagnose MP3")
-        self.diagnose_btn.clicked.connect(self.diagnose_mp3)
-        btn_layout.addWidget(self.diagnose_btn)
+        # self.diagnose_btn = QPushButton("Diagnose MP3")
+        # self.diagnose_btn.clicked.connect(self.diagnose_mp3)
+        # btn_layout.addWidget(self.diagnose_btn)
         
         main_widget.setLayout(layout)
         self.setCentralWidget(main_widget)
@@ -168,7 +196,7 @@ class ComparisonGUI(QMainWindow):
         result = self.results[row]
         
         # Check confidence threshold (fail for bad matches)
-        if result['confidence'] < 0.3:
+        if result['confidence'] < self.CONFIDENCE_THRESHOLD:
             QMessageBox.warning(self, "No Match", 
                             "Cannot match names for files with low confidence score")
             return
@@ -400,34 +428,94 @@ class ComparisonGUI(QMainWindow):
         self.runner = None
 
     def show_results(self, results):
-        self.results = results
-        self.table.setRowCount(len(results))
+        # Store results and initialize table
+        self.results = results.copy()
+        self.table.setRowCount(len(self.results))
         
-        for row, result in enumerate(results):
+        # Temporarily disable sorting to populate data
+        self.table.setSortingEnabled(False)
+        
+        # Populate table data
+        for row, result in enumerate(self.results):
+            # Remastered name
             remastered_name = result.get('display_name', os.path.basename(result['path']))
             self.table.setItem(row, 0, QTableWidgetItem(remastered_name))
+            
+            # Original match
             self.table.setItem(row, 1, QTableWidgetItem(result['match']))
             
-            # Duration cols
+            # Confidence with color coding
+            conf_item = QTableWidgetItem(f"{result['confidence']:.2f}")
+            conf_item.setBackground(self.confidence_color(result['confidence']))
+            self.table.setItem(row, 2, conf_item)
+            
+            # Durations
+            self.table.setItem(row, 3, QTableWidgetItem(self.format_duration(result['rem_duration'])))
+            orig_duration = self.format_duration(result['orig_duration']) if result['orig_duration'] > 0 else "N/A"
+            self.table.setItem(row, 4, QTableWidgetItem(orig_duration))
+
+        # Re-enable sorting
+        self.table.setSortingEnabled(True)
+        
+        # Set default sort by Original (column 1) ascending
+        self.table.horizontalHeader().setSortIndicator(1, Qt.AscendingOrder)
+        self.table.sortByColumn(1, Qt.AscendingOrder)
+        
+        # Connect interaction signals
+        self.table.cellDoubleClicked.connect(self.on_cell_double_clicked)
+        self.table.cellClicked.connect(self.on_cell_clicked)
+        
+        # Update status
+        match_count = len([r for r in self.results if r['confidence'] > self.CONFIDENCE_THRESHOLD])
+        self.status_label.setText(f"Found {match_count} matches out of {len(results)} files")
+
+    def update_sort_indicator(self, index, order):
+        """Handle column sorting with visual indicators"""
+        # Determine sort key based on column
+        if index == 0:  # Remastered
+            key = lambda x: os.path.basename(x['path']).lower()
+        elif index == 1:  # Original
+            key = lambda x: x['match'].lower()
+        elif index == 2:  # Confidence
+            key = lambda x: x['confidence']
+        elif index == 3:  # Remaster Duration
+            key = lambda x: x['rem_duration']
+        elif index == 4:  # Original Duration
+            key = lambda x: x['orig_duration']
+        else:
+            return
+
+        # run sort
+        reverse_sort = (order == Qt.DescendingOrder)
+        self.results.sort(key=key, reverse=reverse_sort)
+
+        # Update table display
+        self.table.blockSignals(True)
+        self.table.setSortingEnabled(False)  # Temp disable sorting to set up table
+        
+        for row, result in enumerate(self.results):
+            self.table.setItem(row, 0, QTableWidgetItem(result.get('display_name', os.path.basename(result['path']))))
+            self.table.setItem(row, 1, QTableWidgetItem(result['match']))
+            self.table.setItem(row, 2, QTableWidgetItem(f"{result['confidence']:.2f}"))
             self.table.setItem(row, 3, QTableWidgetItem(self.format_duration(result['rem_duration'])))
             self.table.setItem(row, 4, QTableWidgetItem(
-                self.format_duration(result['orig_duration']) if result['orig_duration'] > 0 else "N/A"
+                f"{self.format_duration(result['orig_duration'])}" if result['orig_duration'] > 0 else "N/A"
             ))
-            
-            # Confidence col
+            # Reapply confidence cell coloring after sorting also
             conf_item = QTableWidgetItem(f"{result['confidence']:.2f}")
             conf_item.setBackground(self.confidence_color(result['confidence']))
             self.table.setItem(row, 2, conf_item)
 
-        # Connect click events after populating table
-        self.table.cellDoubleClicked.connect(self.on_cell_double_clicked)
-        self.table.cellClicked.connect(self.on_cell_clicked)
+        # Update status text
+        direction = "ascending" if order == Qt.AscendingOrder else "descending"
+        self.status_label.setText(
+            f"{self.status_label.text().split('(')[0].strip()} "
+            f"(sorted by {self.COLUMN_NAMES[index]} {direction})"
+        )
         
-        match_count = len([r for r in results if r['confidence'] > 0.3])
-        self.status_label.setText(f"Found {match_count} matches out of {len(results)} files")
-
-
-
+        self.table.setSortingEnabled(True)
+        self.table.horizontalHeader().setSortIndicator(index, order)
+        self.table.blockSignals(False)
 
 
 
@@ -492,82 +580,82 @@ class ComparisonGUI(QMainWindow):
         seconds = int(seconds % 60)
         return f"{minutes:02d}:{seconds:02d}"
         
-    def diagnose_mp3(self):
-        """Diagnostic tool for MP3 files"""
-        file_path, _ = QFileDialog.getOpenFileName(
-            self, "Select MP3 File to Diagnose", "", "MP3 Files (*.mp3)"
-        )
+    # def diagnose_mp3(self):
+    #     """Diagnostic tool for MP3 files"""
+    #     file_path, _ = QFileDialog.getOpenFileName(
+    #         self, "Select MP3 File to Diagnose", "", "MP3 Files (*.mp3)"
+    #     )
         
-        if not file_path:
-            return
+    #     if not file_path:
+    #         return
             
-        try:
-            # Basic file info
-            size = os.path.getsize(file_path)
+    #     try:
+    #         # Basic file info
+    #         size = os.path.getsize(file_path)
             
-            # Try to read header
-            with open(file_path, 'rb') as f:
-                header = f.read(10)
+    #         # Try to read header
+    #         with open(file_path, 'rb') as f:
+    #             header = f.read(10)
                 
-            # Check backends
-            backends = []
-            try:
-                import subprocess
-                subprocess.check_output(['ffmpeg', '-version'], stderr=subprocess.STDOUT)
-                backends.append("ffmpeg")
-            except:
-                pass
+    #         # Check backends
+    #         backends = []
+    #         try:
+    #             import subprocess
+    #             subprocess.check_output(['ffmpeg', '-version'], stderr=subprocess.STDOUT)
+    #             backends.append("ffmpeg")
+    #         except:
+    #             pass
                 
-            try:
-                import subprocess
-                subprocess.check_output(['avconv', '-version'], stderr=subprocess.STDOUT)
-                backends.append("avconv")
-            except:
-                pass
+    #         try:
+    #             import subprocess
+    #             subprocess.check_output(['avconv', '-version'], stderr=subprocess.STDOUT)
+    #             backends.append("avconv")
+    #         except:
+    #             pass
                 
-            # Try loading with different methods
-            results = []
+    #         # Try loading with different methods
+    #         results = []
             
-            # 1. librosa
-            try:
-                y, sr = librosa.load(file_path, sr=22050, mono=True, duration=5)
-                results.append(f"librosa: SUCCESS ({len(y)} samples)")
-            except Exception as e:
-                results.append(f"librosa: FAILED ({str(e)})")
+    #         # 1. librosa
+    #         try:
+    #             y, sr = librosa.load(file_path, sr=22050, mono=True, duration=5)
+    #             results.append(f"librosa: SUCCESS ({len(y)} samples)")
+    #         except Exception as e:
+    #             results.append(f"librosa: FAILED ({str(e)})")
                 
-            # 2. pydub
-            try:
-                from pydub import AudioSegment
-                audio = AudioSegment.from_file(file_path, format="mp3")
-                results.append(f"pydub: SUCCESS ({len(audio)} ms, {audio.channels} channels)")
-            except Exception as e:
-                results.append(f"pydub: FAILED ({str(e)})")
+    #         # 2. pydub
+    #         try:
+    #             from pydub import AudioSegment
+    #             audio = AudioSegment.from_file(file_path, format="mp3")
+    #             results.append(f"pydub: SUCCESS ({len(audio)} ms, {audio.channels} channels)")
+    #         except Exception as e:
+    #             results.append(f"pydub: FAILED ({str(e)})")
                 
-            # 3. audioread
-            try:
-                import audioread
-                with audioread.audio_open(file_path) as audio_file:
-                    results.append(f"audioread: SUCCESS ({audio_file.samplerate} Hz)")
-            except Exception as e:
-                results.append(f"audioread: FAILED ({str(e)})")
+    #         # 3. audioread
+    #         try:
+    #             import audioread
+    #             with audioread.audio_open(file_path) as audio_file:
+    #                 results.append(f"audioread: SUCCESS ({audio_file.samplerate} Hz)")
+    #         except Exception as e:
+    #             results.append(f"audioread: FAILED ({str(e)})")
                 
-            # Show results
-            QMessageBox.information(
-                self,
-                "MP3 Diagnostic Results",
-                f"File: {file_path}\n"
-                f"Size: {size} bytes\n"
-                f"Header: {header.hex()[:20]}...\n\n"
-                f"Available backends: {', '.join(backends) if backends else 'NONE'}\n\n"
-                f"Loading tests:\n" + "\n".join(results)
-            )
+    #         # Show results
+    #         QMessageBox.information(
+    #             self,
+    #             "MP3 Diagnostic Results",
+    #             f"File: {file_path}\n"
+    #             f"Size: {size} bytes\n"
+    #             f"Header: {header.hex()[:20]}...\n\n"
+    #             f"Available backends: {', '.join(backends) if backends else 'NONE'}\n\n"
+    #             f"Loading tests:\n" + "\n".join(results)
+    #         )
             
-        except Exception as e:
-            QMessageBox.critical(
-                self,
-                "Diagnostic Error",
-                f"Error diagnosing MP3: {str(e)}"
-            )
+    #     except Exception as e:
+    #         QMessageBox.critical(
+    #             self,
+    #             "Diagnostic Error",
+    #             f"Error diagnosing MP3: {str(e)}"
+    #         )
         
 
 if __name__ == '__main__':
