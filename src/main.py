@@ -3,12 +3,11 @@ import os
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
                             QPushButton, QLabel, QFileDialog, QProgressBar, QTableWidget,
                             QTableWidgetItem, QHeaderView, QGroupBox, QButtonGroup, 
-                            QRadioButton, QMessageBox, QMenu, QInputDialog, QComboBox) # do generic import?
+                            QRadioButton, QMessageBox, QMenu, QInputDialog, QComboBox)
 
 from PyQt5.QtGui import QColor
 from PyQt5.QtCore import Qt
 from runner import Runner
-import librosa
 
 class ComparisonGUI(QMainWindow):
     # Constant for col names
@@ -38,6 +37,9 @@ class ComparisonGUI(QMainWindow):
         self.rename_action = None
 
     def init_ui(self):
+        """
+        Initializes the UI.
+        """
         self.setWindowTitle('Audio Matcher')
         self.setGeometry(100, 100, 1200, 800)
         
@@ -135,7 +137,6 @@ class ComparisonGUI(QMainWindow):
         self.table.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeToContents)
         # sort in table
         self.table.setSortingEnabled(True)
-        # self.table.horizontalHeader().setSortIndicator(-1, Qt.AscendingOrder)
         self.table.horizontalHeader().setSortIndicatorShown(True)
         self.table.horizontalHeader().setSectionsClickable(True)
         self.table.horizontalHeader().sortIndicatorChanged.connect(self.update_sort_indicator)
@@ -146,7 +147,6 @@ class ComparisonGUI(QMainWindow):
         header = self.table.horizontalHeader()
         header.setHighlightSections(False)
         header.setSectionResizeMode(QHeaderView.Stretch)
-        # header.setSectionsClickable(False)
         header.setSectionsClickable(True)
         
         vertical_header = self.table.verticalHeader()
@@ -169,16 +169,15 @@ class ComparisonGUI(QMainWindow):
         btn_layout.addWidget(self.start_btn)
         btn_layout.addWidget(self.refresh_btn)
         layout.addLayout(btn_layout)
-
-        # self.diagnose_btn = QPushButton("Diagnose MP3")
-        # self.diagnose_btn.clicked.connect(self.diagnose_mp3)
-        # btn_layout.addWidget(self.diagnose_btn)
         
         main_widget.setLayout(layout)
         self.setCentralWidget(main_widget)
 
     # When the source and target file cells are right clicked = context menu
     def context_menu(self, pos):
+        """
+        Displays a context menu for the selected cell when right clicked.
+        """
         menu = QMenu()
         item = self.table.itemAt(pos)
         
@@ -192,6 +191,9 @@ class ComparisonGUI(QMainWindow):
         menu.exec_(self.table.viewport().mapToGlobal(pos))
 
     def match_name(self, item):
+        """
+        Matches the name of the selected cell to the name of the other.
+        """
         row = item.row()
         col = item.column()
         result = self.results[row]
@@ -257,6 +259,12 @@ class ComparisonGUI(QMainWindow):
                 QMessageBox.critical(self, "Error", f"Could not rename file: {str(e)}")
 
     def rename_file(self, item):
+        """
+        Renames the file of the selected cell.
+
+        Args:
+            item (QTableWidgetItem): The file to be renamed.
+        """
         row = item.row()
         col = item.column()
         
@@ -380,6 +388,10 @@ class ComparisonGUI(QMainWindow):
         """
         Helper to complete refresh with sort preservation.
         Handles the core table refresh logic.
+
+        Args:
+            sort_col (int): The column to sort by.
+            sort_order (Qt.SortOrder): The order to sort by.
         """
         # Store current selection and initialize a selected item
         selected_row = self.table.currentRow()
@@ -476,10 +488,6 @@ class ComparisonGUI(QMainWindow):
                                 "Table has been refreshed with current file states.")
             return
 
-
-
-
-
         # Scan directories and build file size map to associate with unlocated files
         updated_files = False
         for dir_path in dirs_to_scan:
@@ -519,14 +527,14 @@ class ComparisonGUI(QMainWindow):
             QMessageBox.information(self, "Refresh Complete", 
                                 "Table has been refreshed with current file states.")
 
-
-
-                                
-
     def _run_sort(self, col, order):
         """
         Helper to sort the underlying results list using proper keys to
         ensure table displays the correct, current data.
+
+        Args: 
+            col (int): The column to sort by.
+            order (Qt.SortOrder): The order to sort by (ascending or descending).
         """
         reverse = order == Qt.DescendingOrder
         
@@ -547,51 +555,68 @@ class ComparisonGUI(QMainWindow):
         elif col == 4:  # Original Duration
             self.results.sort(key=lambda x: x['orig_duration'], reverse=reverse)
 
-    def select_originals(self):
+    def select_files(self, is_original=True):
+        """
+        Selects files from selected files/folders to be used for comparison.
+        Args:
+            is_original (bool, Default = True): If True, select original files. If False, select remastered files.
+        """
+        file_type = "Original" if is_original else "Remastered"
+        target_files = self.original_files if is_original else self.remastered_files
+        target_label = self.orig_label if is_original else self.remastered_label
+        
         if self.folder_rb.isChecked():
-            path = QFileDialog.getExistingDirectory(self, "Select Original Folder")
+            path = QFileDialog.getExistingDirectory(self, f"Select {file_type} Folder")
             if path:
-                self.original_files = self.scan_audio_files(path)
-                self.orig_label.setText(f"Original Files: {len(self.original_files)} in folder")
+                target_files = self.scan_audio_files(path)
+                target_label.setText(f"{file_type} Files: {len(target_files)} in folder")
                 # Verify if any audio files found
-                if not self.original_files:
+                if not target_files:
                     QMessageBox.warning(self, "Warning", 
                                     f"No audio files found in {path}.\n"
                                     "Check that the folder contains supported audio files.")
         else:
             files, _ = QFileDialog.getOpenFileNames(
                 self, 
-                "Select Original Files", 
+                f"Select {file_type} Files", 
                 "", 
                 "Audio Files (*.mp3 *.wav *.flac *.ogg *.m4a)"
             )
-            if files: 
-                # Verify each file exists (plan to make it stop if one fails so it doesnt send bunch of error boxes and crash)
+            if files:
+                # Verify each file exists
                 valid_files = [f for f in files if os.path.exists(f)]
                 if len(valid_files) != len(files):
                     QMessageBox.warning(self, "Warning", 
                                     f"{len(files) - len(valid_files)} files could not be accessed.")
                 
-                self.original_files = valid_files
-                self.orig_label.setText(f"Original Files: {len(valid_files)} selected")
+                target_files = valid_files
+                target_label.setText(f"{file_type} Files: {len(valid_files)} selected")
+        
+        # Update the class variable
+        if is_original:
+            self.original_files = target_files
+        else:
+            self.remastered_files = target_files
+
+    def select_originals(self):
+        """
+        Selects the original files from selected files/folders.
+        """
+        self.select_files(is_original=True)
 
     def select_remastered(self):
-        if self.folder_rb.isChecked():
-            path = QFileDialog.getExistingDirectory(self, "Select Remastered Folder")
-            if path:
-                self.remastered_files = self.scan_audio_files(path)
-                self.remastered_label.setText(f"Remastered Files: {len(self.remastered_files)} in folder")
-        else:
-            files, _ = QFileDialog.getOpenFileNames(self, "Select Remastered Files", "", 
-                                                  "Audio Files (*.mp3 *.wav *.flac *.ogg *.m4a)")
-            if files:
-                self.remastered_files = files
-                self.remastered_label.setText(f"Remastered Files: {len(files)} selected")
-
-
-
+        """
+        Selects the remastered files from selected files/folders.
+        """
+        self.select_files(is_original=False)
 
     def scan_audio_files(self, folder):
+        """
+        Scans the audio files in the selected folder.
+
+        Returns:
+            list: A list of audio files from the selected folder.
+        """
         audio_files = []
         for root, _, files in os.walk(folder):
             for file in files:
@@ -599,11 +624,10 @@ class ComparisonGUI(QMainWindow):
                     audio_files.append(os.path.join(root, file))
         return audio_files
     
-
-
-    
-
     def start_comparison(self):
+        """
+        Starts the process for comparing the files.
+        """
         if not self.original_files or not self.remastered_files:
             QMessageBox.warning(self, "Error", "Please select both original and remastered files")
             return
@@ -633,15 +657,31 @@ class ComparisonGUI(QMainWindow):
         self.runner.start()
 
     def update_progress(self, value, message):
+        """
+        Updates the progress bar and status label.
+
+        Args:
+            value (int): The value to set the progress bar to.
+            message (str): The message to display in the status label.
+        """
         self.progress.setValue(value)
         self.status_label.setText(message)
 
     def show_error(self, error_msg):
+        """
+        Shows error message and stops the runner.
+
+        Args: 
+            error_msg (str): The error message to display.
+        """
         QMessageBox.critical(self, "Error", error_msg)
         if self.runner:
             self.runner.stop()
 
     def on_runner_finished(self):
+        """
+        Re-enables UI once runner is finished and resets runner.
+        """
         # Re-enable UI
         self.start_btn.setEnabled(True)
         self.orig_btn.setEnabled(True)
@@ -650,6 +690,12 @@ class ComparisonGUI(QMainWindow):
         self.runner = None
 
     def show_results(self, results):
+        """
+        Show the results of the comparison in the table.
+
+        Args: 
+            results (list): The results of the comparison.
+        """
         # Store results and initialize table
         self.results = results.copy()
         self.table.setRowCount(len(self.results))
@@ -705,7 +751,11 @@ class ComparisonGUI(QMainWindow):
 
     def update_sort_indicator(self, index, order):
         """
-        Handles column sorting and updates the table display with refreshed sorteddata.
+        Handles column sorting and updates the table display with refreshed, sorted data.
+
+        Args:
+            index (int): The index of the column to sort by.
+            order (Qt.SortOrder): The order to sort by (ascending or descending).
         """
         # Run the sort
         self._run_sort(index, order)
@@ -765,24 +815,28 @@ class ComparisonGUI(QMainWindow):
         # Force an immediate UI update
         self.table.viewport().update()
 
-    def on_cell_clicked(self, row, column):
+    def on_cell_clicked(self, row, col):
         """
         Handles single clicks for highlighting the clicked cell.
+
+        Args:
+            row (int): The row of the clicked cell.
+            col (int): The column of the clicked cell.
         """
-        if column in (0, 1):
+        if col in (0, 1):
             self.table.clearSelection()
-            item = self.table.item(row, column)
+            item = self.table.item(row, col)
             if item:
                 item.setSelected(True)
         else:
             self.table.clearSelection()
 
-    def on_cell_double_clicked(self, row, column):
+    def on_cell_double_clicked(self, row, col):
         """
         Handles double clicks for opening the file in the cell that was clicked.
         """
-        if column in (0, 1):
-            item = self.table.item(row, column)
+        if col in (0, 1):
+            item = self.table.item(row, col)
             if not item:
                 return
                 
@@ -817,7 +871,7 @@ class ComparisonGUI(QMainWindow):
     @staticmethod
     def open_file(path):
         """
-        Opens (audio) file with user's default application
+        Opens (audio) file with user's default application.
         """
         try:
             if os.name == 'nt':  # Windows
@@ -839,90 +893,20 @@ class ComparisonGUI(QMainWindow):
         
     @staticmethod
     def format_duration(seconds):
-        """Convert seconds to mm:ss format"""
+        """
+        Convert seconds to mm:ss format.
+
+        Args:
+            seconds (int): The number of seconds to convert.
+
+        Returns:
+            str: The duration in mm:ss format.
+        """
         if seconds <= 0:
             return "N/A"
         minutes = int(seconds // 60)
         seconds = int(seconds % 60)
         return f"{minutes:02d}:{seconds:02d}"
-        
-    # def diagnose_mp3(self):
-    #     """Diagnostic tool for MP3 files"""
-    #     file_path, _ = QFileDialog.getOpenFileName(
-    #         self, "Select MP3 File to Diagnose", "", "MP3 Files (*.mp3)"
-    #     )
-        
-    #     if not file_path:
-    #         return
-            
-    #     try:
-    #         # Basic file info
-    #         size = os.path.getsize(file_path)
-            
-    #         # Try to read header
-    #         with open(file_path, 'rb') as f:
-    #             header = f.read(10)
-                
-    #         # Check backends
-    #         backends = []
-    #         try:
-    #             import subprocess
-    #             subprocess.check_output(['ffmpeg', '-version'], stderr=subprocess.STDOUT)
-    #             backends.append("ffmpeg")
-    #         except:
-    #             pass
-                
-    #         try:
-    #             import subprocess
-    #             subprocess.check_output(['avconv', '-version'], stderr=subprocess.STDOUT)
-    #             backends.append("avconv")
-    #         except:
-    #             pass
-                
-    #         # Try loading with different methods
-    #         results = []
-            
-    #         # 1. librosa
-    #         try:
-    #             y, sr = librosa.load(file_path, sr=22050, mono=True, duration=5)
-    #             results.append(f"librosa: SUCCESS ({len(y)} samples)")
-    #         except Exception as e:
-    #             results.append(f"librosa: FAILED ({str(e)})")
-                
-    #         # 2. pydub
-    #         try:
-    #             from pydub import AudioSegment
-    #             audio = AudioSegment.from_file(file_path, format="mp3")
-    #             results.append(f"pydub: SUCCESS ({len(audio)} ms, {audio.channels} channels)")
-    #         except Exception as e:
-    #             results.append(f"pydub: FAILED ({str(e)})")
-                
-    #         # 3. audioread
-    #         try:
-    #             import audioread
-    #             with audioread.audio_open(file_path) as audio_file:
-    #                 results.append(f"audioread: SUCCESS ({audio_file.samplerate} Hz)")
-    #         except Exception as e:
-    #             results.append(f"audioread: FAILED ({str(e)})")
-                
-    #         # Show results
-    #         QMessageBox.information(
-    #             self,
-    #             "MP3 Diagnostic Results",
-    #             f"File: {file_path}\n"
-    #             f"Size: {size} bytes\n"
-    #             f"Header: {header.hex()[:20]}...\n\n"
-    #             f"Available backends: {', '.join(backends) if backends else 'NONE'}\n\n"
-    #             f"Loading tests:\n" + "\n".join(results)
-    #         )
-            
-    #     except Exception as e:
-    #         QMessageBox.critical(
-    #             self,
-    #             "Diagnostic Error",
-    #             f"Error diagnosing MP3: {str(e)}"
-    #         )
-        
 
 if __name__ == '__main__':
     app = QApplication(sys.argv)

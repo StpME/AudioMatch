@@ -1,8 +1,6 @@
 from PyQt5.QtCore import QThread, pyqtSignal, QMutex
 import traceback
 import os
-import librosa
-import numpy as np
 import gc
 from audio_processor import AudioLoader, FeatureExtractor
 
@@ -22,6 +20,9 @@ class Runner(QThread):
         self.comparator = None
     
     def run(self):
+        """
+        Runs the comparison process.
+        """
         try:
             from comparator import AudioComparator
             self.comparator = AudioComparator()
@@ -92,7 +93,6 @@ class Runner(QThread):
 
         Returns: 
             results: List of file details.
-
         """
         results = []
         total_processed = 0
@@ -152,35 +152,35 @@ class Runner(QThread):
         """
         gc.collect()
     
-    def load_reference(self, path):
-        """test method for compatibility"""
-        try:
-            y, sr = AudioLoader.load_audio(path)
-            features = FeatureExtractor.extract_features(y, sr)
-            return os.path.basename(path), features, sr
-        except Exception as e:
-            self.error_occurred.emit(f"Skipping {path}: {str(e)}")
-            return None
+    # def load_reference(self, path):
+    #     """test method for compatibility"""
+    #     try:
+    #         y, sr = AudioLoader.load_audio(path)
+    #         features = FeatureExtractor.extract_features(y, sr)
+    #         return os.path.basename(path), features, sr
+    #     except Exception as e:
+    #         self.error_occurred.emit(f"Skipping {path}: {str(e)}")
+    #         return None
 
-    def process_file(self, comparator, path):
-        """test method for compatibility"""
-        try:
-            match, _ = comparator.compare(path)
-            return {
-                'remastered': os.path.basename(path),
-                'match': match.get('reference', "No match") if match else "No match",
-                'confidence': match['similarity'] if match else 0.0,
-                'path': path
-            }
-        except Exception as e:
-            error_msg = f"Error processing {path}: {str(e)}"
-            self.error_occurred.emit(error_msg)
-            return None
+    # def process_file(self, comparator, path):
+    #     """test method for compatibility"""
+    #     try:
+    #         match, _ = comparator.compare(path)
+    #         return {
+    #             'remastered': os.path.basename(path),
+    #             'match': match.get('reference', "No match") if match else "No match",
+    #             'confidence': match['similarity'] if match else 0.0,
+    #             'path': path
+    #         }
+    #     except Exception as e:
+    #         error_msg = f"Error processing {path}: {str(e)}"
+    #         self.error_occurred.emit(error_msg)
+    #         return None
 
-    def _update_progress(self, current, total, message):
-        """test method for compatibility"""
-        progress = int((current / total) * 100)
-        self.progress_updated.emit(progress, message)
+    # def _update_progress(self, current, total, message):
+    #     """test method for compatibility"""
+    #     progress = int((current / total) * 100)
+    #     self.progress_updated.emit(progress, message)
 
 
 
