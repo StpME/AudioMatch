@@ -164,9 +164,10 @@ class ComparisonGUI(QMainWindow):
         btn_layout = QHBoxLayout()
         self.start_btn = QPushButton("Start Comparison")
         self.start_btn.clicked.connect(self.start_comparison)
-        # self.export_btn = QPushButton("Export Results")
+        self.refresh_btn = QPushButton("Refresh Table")
+        self.refresh_btn.clicked.connect(self.refresh_table)
         btn_layout.addWidget(self.start_btn)
-        # btn_layout.addWidget(self.export_btn)
+        btn_layout.addWidget(self.refresh_btn)
         layout.addLayout(btn_layout)
 
         # self.diagnose_btn = QPushButton("Diagnose MP3")
@@ -343,14 +344,24 @@ class ComparisonGUI(QMainWindow):
                         comparator.reference_features[new_base_name] = ref_data
                         del comparator.reference_features[old_name]
 
-            # Full table refresh
+            # Full table refresh + sort preservation
             self._refresh_full_table(sort_col, sort_order)
+            
+            # Check if the rename was successful
+            if not os.path.exists(new_path):
+                raise Exception("File rename operation completed but file not found at new location")
             
             QMessageBox.information(self, "Success", "File renamed successfully!")
 
+        except PermissionError:
+            QMessageBox.warning(self, "File in Use", 
+                            "Cannot rename file while it is being used by another process.")
+            return
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Could not rename file:\n{str(e)}")
-            self._refresh_full_table(sort_col, sort_order)
+            # Only refresh if we need to recover from an error
+            if not os.path.exists(current_path) and os.path.exists(new_path):
+                self.refresh_table()
 
     def _validate_table_integrity(self):
         """
@@ -367,7 +378,8 @@ class ComparisonGUI(QMainWindow):
 
     def _refresh_full_table(self, sort_col, sort_order):
         """
-        Helper to complete table refresh with sort preservation.
+        Helper to complete refresh with sort preservation.
+        Handles the core table refresh logic.
         """
         # Store current selection and initialize a selected item
         selected_row = self.table.currentRow()
@@ -430,6 +442,86 @@ class ComparisonGUI(QMainWindow):
         
         # Validate table integrity after refresh
         self._validate_table_integrity()
+
+    def refresh_table(self):
+        """
+        Forces a complete table refresh while maintaining current sort order.
+        Handles the file system changes and user interaction when using refresh.
+        """
+
+        # Store current sort state
+        header = self.table.horizontalHeader()
+        sort_col = header.sortIndicatorSection()
+        sort_order = header.sortIndicatorOrder()
+
+        # Track which directories we need to scan
+        dirs_to_scan = set()
+        missing_files = []
+        
+        # First pass: identify missing files and directories to scan
+        for result in self.results:
+            if not os.path.exists(result['path']):
+                dirs_to_scan.add(os.path.dirname(result['path']))
+                missing_files.append(('remastered', result))
+
+
+            if result.get('orig_path') and not os.path.exists(result['orig_path']):
+                dirs_to_scan.add(os.path.dirname(result['orig_path']))
+                missing_files.append(('original', result))
+
+        if not missing_files:
+            # No files to update, just refresh the display
+            self._refresh_full_table(sort_col, sort_order)
+            QMessageBox.information(self, "Refresh Complete", 
+                                "Table has been refreshed with current file states.")
+            return
+
+
+
+
+
+        # Scan directories and build file size map to associate with unlocated files
+        updated_files = False
+        for dir_path in dirs_to_scan:
+            # Map of file sizes to paths for the directory
+            size_map = {}
+            for file in os.listdir(dir_path):
+                if file.lower().endswith(('.mp3', '.wav', '.flac', '.ogg', '.m4a')):
+                    try:
+                        file_path = os.path.join(dir_path, file)
+                        size_map[os.path.getsize(file_path)] = file_path
+                    except:
+                        continue
+
+            # Check each missing file against the size map
+            for file_type, result in missing_files:
+                if file_type == 'remastered' and 'file_size' in result:
+                    if result['file_size'] in size_map:
+                        new_path = size_map[result['file_size']]
+                        result['path'] = new_path
+                        result['display_name'] = os.path.basename(new_path)
+                        updated_files = True
+                elif file_type == 'original' and 'orig_file_size' in result:
+                    if result['orig_file_size'] in size_map:
+                        new_path = size_map[result['orig_file_size']]
+                        result['orig_path'] = new_path
+                        result['match'] = os.path.splitext(os.path.basename(new_path))[0]
+                        updated_files = True
+
+        # Refresh the table with updated paths
+        self._refresh_full_table(sort_col, sort_order)
+
+        # Show appropriate message
+        if updated_files:
+            QMessageBox.information(self, "Refresh Complete", 
+                                "Table has been refreshed and updated with renamed files.")
+        else:
+            QMessageBox.information(self, "Refresh Complete", 
+                                "Table has been refreshed with current file states.")
+
+
+
+                                
 
     def _run_sort(self, col, order):
         """
@@ -527,6 +619,7 @@ class ComparisonGUI(QMainWindow):
         self.start_btn.setEnabled(False)
         self.orig_btn.setEnabled(False)
         self.remastered_btn.setEnabled(False)
+        self.refresh_btn.setEnabled(False)
         
         self.progress.setValue(0)
         self.status_label.setText("Starting comparison...")
@@ -553,6 +646,7 @@ class ComparisonGUI(QMainWindow):
         self.start_btn.setEnabled(True)
         self.orig_btn.setEnabled(True)
         self.remastered_btn.setEnabled(True)
+        self.refresh_btn.setEnabled(True)
         self.runner = None
 
     def show_results(self, results):
@@ -565,6 +659,13 @@ class ComparisonGUI(QMainWindow):
         
         # Populate table data
         for row, result in enumerate(self.results):
+            # Store file sizes for both remastered and original files
+            # This helps with refresh to compare based on these sizes
+            if os.path.exists(result['path']):
+                result['file_size'] = os.path.getsize(result['path'])
+            if result.get('orig_path') and os.path.exists(result['orig_path']):
+                result['orig_file_size'] = os.path.getsize(result['orig_path'])
+            
             # Remastered name with file path reference
             remastered_name = result.get('display_name', os.path.basename(result['path']))
             remastered_item = QTableWidgetItem(remastered_name)
@@ -686,8 +787,32 @@ class ComparisonGUI(QMainWindow):
                 return
                 
             file_path = item.data(Qt.UserRole)
-            if file_path and os.path.exists(file_path):
-                self.open_file(file_path)
+            if not file_path:
+                return
+                
+            try:
+                if os.path.exists(file_path):
+                    self.open_file(file_path)
+                else:
+                    # Show error with refresh option if there are issues
+                    msg = QMessageBox()
+                    msg.setIcon(QMessageBox.Critical)
+                    msg.setWindowTitle("File Not Found")
+                    msg.setText(f"The file could not be found:\n{file_path}")
+                    msg.setInformativeText("This can happen if files were renamed or moved. Try refreshing the table.")
+                    
+                    # Add buttons
+                    refresh_btn = msg.addButton("Refresh Table", QMessageBox.ActionRole)
+                    msg.addButton(QMessageBox.Ok)
+                    
+                    response = msg.exec_()
+                    
+                    if response == 0:  # Refresh Table button is clicked
+                        self.refresh_table()
+                            
+            except Exception as e:
+                QMessageBox.critical(self, "Open Error",
+                                f"Could not open file:\n{file_path}\nError: {str(e)}")
 
     @staticmethod
     def open_file(path):
