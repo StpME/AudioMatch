@@ -12,6 +12,16 @@ class AudioComparator:
         self.threshold = threshold
 
     def compare(self, query_path):
+        """
+        Compare the query audio to the reference features.
+
+        Args:
+            query_path (str): The path to the query audio file.
+
+        Returns:
+            tuple: A tuple containing the best match and
+            a dictionary of the results.
+        """
         try:
             y_query, sr_query = AudioLoader.load_audio(query_path)
             query_duration = AudioLoader.get_full_duration(query_path)
@@ -43,8 +53,7 @@ class AudioComparator:
             
         results.sort(key=lambda x: x['similarity'], reverse=True)
         best = results[0] if results[0]['similarity'] >= self.threshold else None
-        return (
-        best, 
+        return (best, 
         {
             'results': results,
             'query_duration': query_duration
@@ -52,7 +61,12 @@ class AudioComparator:
     )
 
     def _safe_similarity(self, query, ref):
-        """Thread-safe similarity calculation"""
+        """
+        Thread-safe similarity calculation.
+
+        Returns:
+            float: The similarity score between the query and reference features.
+        """
         scores = []
         
         # Chroma comparison with size validation
@@ -61,7 +75,8 @@ class AudioComparator:
                 min_frames = min(query['chroma'].shape[1], ref['chroma'].shape[1])
                 q_chroma = query['chroma'][:, :min_frames]
                 r_chroma = ref['chroma'][:, :min_frames]
-                d, _ = fastdtw(q_chroma.T, r_chroma.T, dist=cosine)
+                # no div by 0 with epsilon
+                d, _ = fastdtw(q_chroma.T, r_chroma.T, dist=lambda x, y: cosine(x, y) + 1e-9)
                 scores.append(1 / (1 + d/100))
             except Exception as e:
                 print(f"Chroma error: {str(e)}")
@@ -71,7 +86,9 @@ class AudioComparator:
             try:
                 q_mfcc = np.mean(query['mfcc'], axis=1)
                 r_mfcc = np.mean(ref['mfcc'], axis=1)
-                scores.append(1 - cosine(q_mfcc, r_mfcc))
+                #no div by 0
+                similarity = 1 - cosine(q_mfcc + 1e-9, r_mfcc + 1e-9)
+                scores.append(max(min(similarity, 1.0), 0.0))
             except Exception as e:
                 print(f"MFCC error: {str(e)}")
 

@@ -259,73 +259,201 @@ class ComparisonGUI(QMainWindow):
         row = item.row()
         col = item.column()
         
-        # Get current path based on column
+        # Get current sort state
+        header = self.table.horizontalHeader()
+        sort_col = header.sortIndicatorSection()
+        sort_order = header.sortIndicatorOrder()
+        
+        # Get current file information using the table item data
+        current_path = ""
+        old_name = ""
+        
+        # Find the correct result entry based on file path from the table item
+        table_item = self.table.item(row, col)
         if col == 0:  # Remastered
-            current_path = self.results[row]['path']
+            current_path = table_item.data(Qt.UserRole)
+            # Find the matching result entry
+            result_entry = next((r for r in self.results if r['path'] == current_path), None)
+            if not result_entry:
+                QMessageBox.warning(self, "Error", "Couldn't find matching file data!")
+                return
         elif col == 1:  # Original
-            current_path = self.results[row].get('orig_path', '')
-        else:
-            return
-
+            current_path = table_item.data(Qt.UserRole)
+            # Find the matching result entry based on og file path
+            result_entry = next((r for r in self.results if r.get('orig_path', '') == current_path), None)
+            if not result_entry:
+                QMessageBox.warning(self, "Error", "Couldn't find matching file data!")
+                return
+        
         if not current_path or not os.path.exists(current_path):
             QMessageBox.warning(self, "Error", "File not found!")
             return
 
-        current_name = os.path.basename(current_path)
-        original_base, original_ext = os.path.splitext(current_name)
-        
+        # Get new name from user
+        current_base = os.path.splitext(os.path.basename(current_path))[0]
         new_name, confirm = QInputDialog.getText(
-            self, 
-            "Rename File", 
-            "Enter new name:", 
-            text=original_base  # Show name w/o extension
-            # need to make the file extension always show (and lock?) so user doesnt have to put
-            # in the file extension themselves when renaming since it is currently removing it each time
+            self, "Rename File", "Enter new name:", text=current_base
         )
         
-        if new_name and confirm:
-            # Split new name into base and extension
-            new_base, new_ext = os.path.splitext(new_name)
+        if not new_name or not confirm:
+            return
+
+        # Validate extension
+        original_ext = os.path.splitext(current_path)[1]
+        new_base, new_ext = os.path.splitext(new_name)
+        if not new_ext:
+            new_name += original_ext
+        elif new_ext.lower() != original_ext.lower():
+            QMessageBox.warning(self, "Invalid Extension", 
+                            f"Extension must remain {original_ext}"
+                            f"\nTry including {original_ext} in the new name.")
+            return
+
+        # Create new path
+        new_path = os.path.join(os.path.dirname(current_path), new_name)
+        
+        try:
+            # File rename
+            os.rename(current_path, new_path)
             
-            # Preserve original extension if none provided
-            if not new_ext:
-                new_name += original_ext
-            # Validate that file extension matches original type
-            elif new_ext.lower() != original_ext.lower():
-                QMessageBox.warning(self, "Invalid Extension", 
-                                f"Extension must remain {original_ext}")
-                return
+            # Update all relevant records
+            if col == 0:  # Renaming remastered file
+                # Update the found result entry with new path and display name
+                result_entry['path'] = new_path
+                result_entry['display_name'] = os.path.basename(new_path)
+            else:  # Renaming original file
+                new_base_name = os.path.basename(new_path)
+                old_name = os.path.basename(current_path)
+                
+                # Update all matches across the results
+                for result in self.results:
+                    if result.get('orig_path', '') == current_path:
+                        result['orig_path'] = new_path
+                    if result['match'] == old_name:
+                        result['match'] = new_base_name
+                        result['orig_path'] = new_path
 
-            # Create full new path
-            new_path = os.path.join(
-                os.path.dirname(current_path),
-                new_name
-            )
+                # Update comparator refs
+                if self.runner and self.runner.comparator:
+                    comparator = self.runner.comparator
+                    if old_name in comparator.reference_features:
+                        # Update all ref features with new path
+                        ref_data = comparator.reference_features[old_name]
+                        ref_data['path'] = new_path
+                        comparator.reference_features[new_base_name] = ref_data
+                        del comparator.reference_features[old_name]
 
-            try:
-                # Perform file rename
-                os.rename(current_path, new_path)
-                
-                # Update cell records
-                if col == 0:  # Remastered
-                    self.results[row]['path'] = new_path
-                    self.results[row]['display_name'] = os.path.basename(new_path)
-                    item.setText(os.path.basename(new_path))
-                elif col == 1:  # Original
-                    self.results[row]['orig_path'] = new_path
-                    # Update the comparator reference if it exists
-                    if self.runner and hasattr(self, 'runner') and self.runner.comparator:
-                        original_name = os.path.basename(new_path)
-                        if original_name in self.runner.comparator.reference_features:
-                            self.runner.comparator.reference_features[original_name]['path'] = new_path
-                
-                QMessageBox.information(self, "Success", "File renamed successfully!")
-                
-            except Exception as e:
-                QMessageBox.critical(self, "Error", 
-                                f"Could not rename file:\n{str(e)}")
-                # Revert display name
-                item.setText(os.path.basename(current_path))
+            # Full table refresh
+            self._refresh_full_table(sort_col, sort_order)
+            
+            QMessageBox.information(self, "Success", "File renamed successfully!")
+
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Could not rename file:\n{str(e)}")
+            self._refresh_full_table(sort_col, sort_order)
+
+    def _validate_table_integrity(self):
+        """
+        Helper to ensure table rows match the file data (names).
+        """
+        for row in range(self.table.rowCount()):
+            table_name = self.table.item(row, 0).text()
+            data_name = os.path.basename(self.results[row]['path'])
+            if table_name != data_name:
+                print(f"Mismatch at row {row}: Table '{table_name}' vs Data '{data_name}'")
+                self.table.item(row, 0).setText(data_name)
+
+
+
+    def _refresh_full_table(self, sort_col, sort_order):
+        """
+        Helper to complete table refresh with sort preservation.
+        """
+        # Store current selection and initialize a selected item
+        selected_row = self.table.currentRow()
+        selected_item = None
+        if 0 <= selected_row < len(self.results):
+            # Store both remastered and original paths for the selected row
+            selected_item = {
+                'remastered': self.results[selected_row]['path'],
+                'original': self.results[selected_row].get('orig_path', ''),
+                'column': self.table.currentColumn()
+            }
+        
+        # Re-sort the data first
+        self._run_sort(sort_col, sort_order)
+        
+        # Clear and rebuild table to refresh and stay synced
+        self.table.setSortingEnabled(False)
+        self.table.setRowCount(len(self.results))
+        
+        for row, result in enumerate(self.results):
+            # Remastered name - uses display name
+            remastered_name = result.get('display_name', os.path.basename(result['path']))
+            remastered_item = QTableWidgetItem(remastered_name)
+            remastered_item.setData(Qt.UserRole, result['path'])
+            self.table.setItem(row, 0, remastered_item)
+            
+            # Original name - try to use real file name otherwise use match name
+            original_name = os.path.basename(result.get('orig_path', '')) if result.get('orig_path') else result['match']
+            original_item = QTableWidgetItem(original_name)
+            original_item.setData(Qt.UserRole, result.get('orig_path', ''))
+            self.table.setItem(row, 1, original_item)
+            
+            # Confidence
+            conf_item = QTableWidgetItem(f"{result['confidence']:.2f}")
+            conf_item.setBackground(self.confidence_color(result['confidence']))
+            self.table.setItem(row, 2, conf_item)
+            
+            # Durations
+            self.table.setItem(row, 3, QTableWidgetItem(self.format_duration(result['rem_duration'])))
+            orig_duration = self.format_duration(result['orig_duration']) if result['orig_duration'] > 0 else "N/A"
+            self.table.setItem(row, 4, QTableWidgetItem(orig_duration))
+
+        # Restore selection based on file path
+        if selected_item:
+            path_to_find = selected_item['remastered'] if selected_item['column'] == 0 else selected_item['original']
+            column_to_check = 0 if selected_item['column'] == 0 else 1
+            
+            for row in range(self.table.rowCount()):
+                if self.table.item(row, column_to_check).data(Qt.UserRole) == path_to_find:
+                    self.table.setCurrentCell(row, selected_item['column'])
+                    break
+
+        # Apply visual sort indicators
+        self.table.setSortingEnabled(True)
+        self.table.horizontalHeader().setSortIndicator(sort_col, sort_order)
+        self.table.sortByColumn(sort_col, sort_order)
+        
+        # Force immediate UI update
+        self.table.viewport().update()
+        
+        # Validate table integrity after refresh
+        self._validate_table_integrity()
+
+    def _run_sort(self, col, order):
+        """
+        Helper to sort the underlying results list using proper keys to
+        ensure table displays the correct, current data.
+        """
+        reverse = order == Qt.DescendingOrder
+        
+        if col == 0:  # Remastered
+            # Sort by display name if available, otherwise by basename of path
+            self.results.sort(key=lambda x: (
+                x.get('display_name', os.path.basename(x['path'])).lower()
+            ), reverse=reverse)
+        elif col == 1:  # Original
+            # Sort by the actual original file path, falling back to match name if path not available
+            self.results.sort(key=lambda x: (
+                os.path.basename(x.get('orig_path', x['match'])).lower()
+            ), reverse=reverse)
+        elif col == 2:  # Confidence
+            self.results.sort(key=lambda x: x['confidence'], reverse=reverse)
+        elif col == 3:  # Remaster Duration
+            self.results.sort(key=lambda x: x['rem_duration'], reverse=reverse)
+        elif col == 4:  # Original Duration
+            self.results.sort(key=lambda x: x['orig_duration'], reverse=reverse)
 
     def select_originals(self):
         if self.folder_rb.isChecked():
@@ -437,12 +565,17 @@ class ComparisonGUI(QMainWindow):
         
         # Populate table data
         for row, result in enumerate(self.results):
-            # Remastered name
+            # Remastered name with file path reference
             remastered_name = result.get('display_name', os.path.basename(result['path']))
-            self.table.setItem(row, 0, QTableWidgetItem(remastered_name))
+            remastered_item = QTableWidgetItem(remastered_name)
+            remastered_item.setData(Qt.UserRole, result['path'])
+            self.table.setItem(row, 0, remastered_item)
             
-            # Original match
-            self.table.setItem(row, 1, QTableWidgetItem(result['match']))
+            # Original match with file path reference
+            original_name = os.path.basename(result.get('orig_path', '')) if result.get('orig_path') else result['match']
+            original_item = QTableWidgetItem(original_name)
+            original_item.setData(Qt.UserRole, result.get('orig_path', ''))
+            self.table.setItem(row, 1, original_item)
             
             # Confidence with color coding
             conf_item = QTableWidgetItem(f"{result['confidence']:.2f}")
@@ -470,57 +603,71 @@ class ComparisonGUI(QMainWindow):
         self.status_label.setText(f"Found {match_count} matches out of {len(results)} files")
 
     def update_sort_indicator(self, index, order):
-        """Handle column sorting with visual indicators"""
-        # Determine sort key based on column
-        if index == 0:  # Remastered
-            key = lambda x: os.path.basename(x['path']).lower()
-        elif index == 1:  # Original
-            key = lambda x: x['match'].lower()
-        elif index == 2:  # Confidence
-            key = lambda x: x['confidence']
-        elif index == 3:  # Remaster Duration
-            key = lambda x: x['rem_duration']
-        elif index == 4:  # Original Duration
-            key = lambda x: x['orig_duration']
-        else:
-            return
+        """
+        Handles column sorting and updates the table display with refreshed sorteddata.
+        """
+        # Run the sort
+        self._run_sort(index, order)
 
-        # run sort
-        reverse_sort = (order == Qt.DescendingOrder)
-        self.results.sort(key=key, reverse=reverse_sort)
+        # Get current selection before refresh
+        current_item = self.table.currentItem()
+        current_path = None
+        if current_item and current_item.column() in (0, 1):
+            current_path = current_item.data(Qt.UserRole)
 
-        # Update table display
+        # Update the table display
         self.table.blockSignals(True)
-        self.table.setSortingEnabled(False)  # Temp disable sorting to set up table
+        self.table.setSortingEnabled(False)
         
-        for row, result in enumerate(self.results):
-            self.table.setItem(row, 0, QTableWidgetItem(result.get('display_name', os.path.basename(result['path']))))
-            self.table.setItem(row, 1, QTableWidgetItem(result['match']))
-            self.table.setItem(row, 2, QTableWidgetItem(f"{result['confidence']:.2f}"))
-            self.table.setItem(row, 3, QTableWidgetItem(self.format_duration(result['rem_duration'])))
-            self.table.setItem(row, 4, QTableWidgetItem(
-                f"{self.format_duration(result['orig_duration'])}" if result['orig_duration'] > 0 else "N/A"
-            ))
-            # Reapply confidence cell coloring after sorting also
+        # Store the sorted results order
+        sorted_results = self.results.copy()
+        
+        for row, result in enumerate(sorted_results):
+            # Update remastered col
+            remastered_name = result.get('display_name', os.path.basename(result['path']))
+            remastered_item = QTableWidgetItem(remastered_name)
+            remastered_item.setData(Qt.UserRole, result['path'])
+            self.table.setItem(row, 0, remastered_item)
+            
+            # Update original col
+            original_name = os.path.basename(result.get('orig_path', '')) if result.get('orig_path') else result['match']
+            original_item = QTableWidgetItem(original_name)
+            original_item.setData(Qt.UserRole, result.get('orig_path', ''))
+            self.table.setItem(row, 1, original_item)
+            
+            # Update confidence col
             conf_item = QTableWidgetItem(f"{result['confidence']:.2f}")
             conf_item.setBackground(self.confidence_color(result['confidence']))
             self.table.setItem(row, 2, conf_item)
+            
+            # Update durations cols
+            self.table.setItem(row, 3, QTableWidgetItem(self.format_duration(result['rem_duration'])))
+            orig_duration = self.format_duration(result['orig_duration']) if result['orig_duration'] > 0 else "N/A"
+            self.table.setItem(row, 4, QTableWidgetItem(orig_duration))
 
-        # Update status text
-        direction = "ascending" if order == Qt.AscendingOrder else "descending"
-        self.status_label.setText(
-            f"{self.status_label.text().split('(')[0].strip()} "
-            f"(sorted by {self.COLUMN_NAMES[index]} {direction})"
-        )
+        # Update the results list to match the new sort order
+        self.results = sorted_results
+
+        # Restore selection if we had one
+        if current_path:
+            for row in range(self.table.rowCount()):
+                for col in (0, 1):
+                    item = self.table.item(row, col)
+                    if item and item.data(Qt.UserRole) == current_path:
+                        self.table.setCurrentCell(row, col)
+                        break
         
         self.table.setSortingEnabled(True)
         self.table.horizontalHeader().setSortIndicator(index, order)
         self.table.blockSignals(False)
-
-
+        
+        # Force an immediate UI update
+        self.table.viewport().update()
 
     def on_cell_clicked(self, row, column):
-        """Handle single clicks for highlighting"""
+        """
+        Handles single clicks for highlighting the clicked cell.
+        """
         if column in (0, 1):
             self.table.clearSelection()
             item = self.table.item(row, column)
@@ -529,30 +676,24 @@ class ComparisonGUI(QMainWindow):
         else:
             self.table.clearSelection()
 
-
-
-
-
     def on_cell_double_clicked(self, row, column):
-        """Handle cell clicks in the results table"""
-        if 0 <= row < len(self.results):
-            result = self.results[row]
-            
-            # Determine which file to open based on clicked column
-            if column == 0:  # Remastered column
-                file_path = result['path']
-            elif column == 1:  # Original column
-                file_path = result.get('orig_path', '')
-            else:
+        """
+        Handles double clicks for opening the file in the cell that was clicked.
+        """
+        if column in (0, 1):
+            item = self.table.item(row, column)
+            if not item:
                 return
-
-            # Open the file if path exists
+                
+            file_path = item.data(Qt.UserRole)
             if file_path and os.path.exists(file_path):
                 self.open_file(file_path)
 
     @staticmethod
     def open_file(path):
-        """Open file with default application"""
+        """
+        Opens (audio) file with user's default application
+        """
         try:
             if os.name == 'nt':  # Windows
                 os.startfile(path)
