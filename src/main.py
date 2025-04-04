@@ -88,7 +88,7 @@ class ComparisonGUI(QMainWindow):
         # Results table
         self.table = QTableWidget()
         self.table.setEditTriggers(QTableWidget.NoEditTriggers)  # Non-editable cells
-        self.table.setSelectionBehavior(QTableWidget.SelectItems)
+        self.table.setSelectionBehavior(QTableWidget.SelectRows)
         self.table.setSelectionMode(QTableWidget.SingleSelection)
         # self.table.setFocusPolicy(Qt.NoFocus)  # Remove focus border
 
@@ -130,9 +130,10 @@ class ComparisonGUI(QMainWindow):
 
         
         self.table.setColumnCount(5)
-        self.table.setHorizontalHeaderLabels(["Remastered","Original",
-                                              "Confidence", "Remaster Duration", "Original Duration"])
-        self.table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        self.table.setHorizontalHeaderLabels(["Original", "Remastered", "Confidence", "Original Duration", "Remastered Duration"])
+        self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
+        self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
+        self.table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeToContents)
         self.table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeToContents)
         self.table.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeToContents)
         # sort in table
@@ -430,8 +431,8 @@ class ComparisonGUI(QMainWindow):
             self.table.setItem(row, 2, conf_item)
             
             # Durations
-            self.table.setItem(row, 3, QTableWidgetItem(self.format_duration(result['rem_duration'])))
-            orig_duration = self.format_duration(result['orig_duration']) if result['orig_duration'] > 0 else "N/A"
+            self.table.setItem(row, 3, QTableWidgetItem(self.format_duration(result['orig_duration'])))
+            orig_duration = self.format_duration(result['rem_duration']) if result['rem_duration'] > 0 else "N/A"
             self.table.setItem(row, 4, QTableWidgetItem(orig_duration))
 
         # Restore selection based on file path
@@ -538,22 +539,16 @@ class ComparisonGUI(QMainWindow):
         """
         reverse = order == Qt.DescendingOrder
         
-        if col == 0:  # Remastered
-            # Sort by display name if available, otherwise by basename of path
-            self.results.sort(key=lambda x: (
-                x.get('display_name', os.path.basename(x['path'])).lower()
-            ), reverse=reverse)
-        elif col == 1:  # Original
-            # Sort by the actual original file path, falling back to match name if path not available
-            self.results.sort(key=lambda x: (
-                os.path.basename(x.get('orig_path', x['match'])).lower()
-            ), reverse=reverse)
+        if col == 0:  # Original
+            self.results.sort(key=lambda x: os.path.basename(x.get('orig_path', '')), reverse=reverse)
+        elif col == 1:  # Remastered
+            self.results.sort(key=lambda x: os.path.basename(x['path']), reverse=reverse)
         elif col == 2:  # Confidence
             self.results.sort(key=lambda x: x['confidence'], reverse=reverse)
-        elif col == 3:  # Remaster Duration
-            self.results.sort(key=lambda x: x['rem_duration'], reverse=reverse)
-        elif col == 4:  # Original Duration
+        elif col == 3:  # Original Duration
             self.results.sort(key=lambda x: x['orig_duration'], reverse=reverse)
+        elif col == 4:  # Remastered Duration
+            self.results.sort(key=lambda x: x['rem_duration'], reverse=reverse)
 
     def select_files(self, is_original=True):
         """
@@ -705,24 +700,23 @@ class ComparisonGUI(QMainWindow):
         
         # Populate table data
         for row, result in enumerate(self.results):
-            # Store file sizes for both remastered and original files
-            # This helps with refresh to compare based on these sizes
-            if os.path.exists(result['path']):
-                result['file_size'] = os.path.getsize(result['path'])
+            # Store file sizes for both original and remastered files
             if result.get('orig_path') and os.path.exists(result['orig_path']):
                 result['orig_file_size'] = os.path.getsize(result['orig_path'])
+            if os.path.exists(result['path']):
+                result['file_size'] = os.path.getsize(result['path'])
             
-            # Remastered name with file path reference
-            remastered_name = result.get('display_name', os.path.basename(result['path']))
-            remastered_item = QTableWidgetItem(remastered_name)
-            remastered_item.setData(Qt.UserRole, result['path'])
-            self.table.setItem(row, 0, remastered_item)
-            
-            # Original match with file path reference
+            # Original name with file path reference
             original_name = os.path.basename(result.get('orig_path', '')) if result.get('orig_path') else result['match']
             original_item = QTableWidgetItem(original_name)
             original_item.setData(Qt.UserRole, result.get('orig_path', ''))
-            self.table.setItem(row, 1, original_item)
+            self.table.setItem(row, 0, original_item)
+            
+            # Remastered match with file path reference
+            remastered_name = result.get('display_name', os.path.basename(result['path']))
+            remastered_item = QTableWidgetItem(remastered_name)
+            remastered_item.setData(Qt.UserRole, result['path'])
+            self.table.setItem(row, 1, remastered_item)
             
             # Confidence with color coding
             conf_item = QTableWidgetItem(f"{result['confidence']:.2f}")
@@ -730,16 +724,16 @@ class ComparisonGUI(QMainWindow):
             self.table.setItem(row, 2, conf_item)
             
             # Durations
-            self.table.setItem(row, 3, QTableWidgetItem(self.format_duration(result['rem_duration'])))
             orig_duration = self.format_duration(result['orig_duration']) if result['orig_duration'] > 0 else "N/A"
-            self.table.setItem(row, 4, QTableWidgetItem(orig_duration))
+            self.table.setItem(row, 3, QTableWidgetItem(orig_duration))
+            self.table.setItem(row, 4, QTableWidgetItem(self.format_duration(result['rem_duration'])))
 
         # Re-enable sorting
         self.table.setSortingEnabled(True)
         
-        # Set default sort by Original (column 1) ascending
-        self.table.horizontalHeader().setSortIndicator(1, Qt.AscendingOrder)
-        self.table.sortByColumn(1, Qt.AscendingOrder)
+        # Set default sort by Original (column 0) ascending
+        self.table.horizontalHeader().setSortIndicator(0, Qt.AscendingOrder)
+        self.table.sortByColumn(0, Qt.AscendingOrder)
         
         # Connect interaction signals
         self.table.cellDoubleClicked.connect(self.on_cell_double_clicked)
@@ -792,8 +786,8 @@ class ComparisonGUI(QMainWindow):
             self.table.setItem(row, 2, conf_item)
             
             # Update durations cols
-            self.table.setItem(row, 3, QTableWidgetItem(self.format_duration(result['rem_duration'])))
-            orig_duration = self.format_duration(result['orig_duration']) if result['orig_duration'] > 0 else "N/A"
+            self.table.setItem(row, 3, QTableWidgetItem(self.format_duration(result['orig_duration'])))
+            orig_duration = self.format_duration(result['rem_duration']) if result['rem_duration'] > 0 else "N/A"
             self.table.setItem(row, 4, QTableWidgetItem(orig_duration))
 
         # Update the results list to match the new sort order
